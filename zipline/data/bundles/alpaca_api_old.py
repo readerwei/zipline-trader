@@ -14,7 +14,6 @@ from zipline.data.bundles import core as bundles
 from zipline.data.bundles.common import asset_to_sid_map
 from zipline.data.bundles.universe import Universe, all_alpaca_assets, get_sp500, get_sp100, get_nasdaq100
 from dateutil.parser import parse as date_parse
-from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 
 user_home = str(Path.home())
 
@@ -100,43 +99,35 @@ def get_aggs_from_alpaca(symbols,
         """
         you could get max 1000 samples from the server. if we need more
         than that we need to do several api calls.
-        
-        As of 2023/04 this is not the case anymore. 
 
         currently the alpaca api supports also 5Min and 15Min so we could
         optimize server communication time by addressing timeframes
         """
         got_all = False
-        curr = start
+        curr = end
         response: pd.DataFrame = pd.DataFrame([])
         while not got_all:
-            if granularity == 'minute':
-                timeframe = TimeFrame(compression, TimeFrameUnit.Minute)
-            # elif granularity == 'minute' and compression == 15:
-            #     timeframe = TimeFrame(15, TimeFrameUnit.Minute)
+            if granularity == 'minute' and compression == 5:
+                timeframe = "5Min"
+            elif granularity == 'minute' and compression == 15:
+                timeframe = "15Min"
             else:
-                # timeframe = granularity
-                timeframe = TimeFrame(compression, TimeFrameUnit('Day'))
-            # r = CLIENT.get_barset(symbols,
-            #                       timeframe,
-            #                       limit=1000,
-            #                       end=curr.isoformat()
-            #                       )
-            delta = timedelta(days=1) if granularity == "day" else timedelta(minutes=1)
-            # r = CLIENT.get_bars(symbols, timeframe, limit=1000, start=curr.isoformat(), end=end.isoformat())
-            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(), end=end.isoformat())
-            
-            # response = r.df
-            # response.sort_index(inplace=True)
-            # got_all = True
+                timeframe = granularity
+            r = CLIENT.get_barset(symbols,
+                                  timeframe,
+                                  limit=1000,
+                                  end=curr.isoformat()
+                                  )
             if r:
-                response = r.df if response.empty else pd.concat([response, r.df])
+                response = r.df if response.empty else pd.concat([r.df, response])
                 response.sort_index(inplace=True)
-                if response.index[-1] + delta> (pytz.timezone(NY).localize(
-                        end) if not end.tzname() else end):
+                if response.index[0] <= (pytz.timezone(NY).localize(
+                        start) if not start.tzname() else start):
                     got_all = True
-                else:                    
-                    curr = response.index[-1] + delta
+                else:
+                    delta = timedelta(days=1) if granularity == "day" \
+                        else timedelta(minutes=1)
+                    curr = response.index[0] - delta
             else:
                 # no more data is available, let's return what we have
                 break
@@ -218,15 +209,13 @@ def get_aggs_from_alpaca(symbols,
         response = cdl
     if granularity == 'day':
         response = response[start:end]  # we only want data between dates
-    response = response.pivot(columns='symbol').swaplevel(axis=1)
     processed = pd.DataFrame([], columns=response.columns)
     for sym in response.columns.levels[0]:
         df: pd.DataFrame = response[sym]
         df = df.dropna()
         df = _fillna(df, granularity, start, end)
         if processed.empty and not df.empty:
-            # processed = processed.reindex(df.index.values)
-            processed = processed.reindex(df.index)
+            processed = processed.reindex(df.index.values)
         if not df.empty:
             processed[sym] = df
 
@@ -313,7 +302,7 @@ def api_to_bundle(interval=['1m']):
                 daily_bar_writer.write(daily_data_generator(), assets=assets_to_sids.values(), show_progress=True)
             elif _interval == '1m':
                 minute_bar_writer.write(
-                    minute_data_generator(), show_progress=True)
+                    minute_data_generator(), assets=assets_to_sids.values(), show_progress=True)
 
             # Drop the ticker rows which have missing sessions in their data sets
             metadata.dropna(inplace=True)
@@ -341,7 +330,7 @@ if __name__ == '__main__':
     # while not cal.is_session(start_date):
     #     start_date += timedelta(days=1)
 
-    start_date = end_date - timedelta(days=30)
+    start_date = end_date - timedelta(days=365)
     while not cal.is_session(start_date):
         start_date -= timedelta(days=1)
 
@@ -354,8 +343,8 @@ if __name__ == '__main__':
     register(
         'alpaca_api',
         # api_to_bundle(interval=['1d', '1m']),
-        api_to_bundle(interval=['1m']),
-        # api_to_bundle(interval=['1d']),
+        # api_to_bundle(interval=['1m']),
+        api_to_bundle(interval=['1d']),
         calendar_name='NYSE',
         start_session=start_date,
         end_session=end_date

@@ -118,6 +118,7 @@ class DataPortalLive(DataPortal):
         elif data_frequency == 'daily':
             data_frequency = '1d'
         prices = self.broker.get_realtime_bars([asset], data_frequency)
+        prices = prices.pivot(columns='symbol').swaplevel(axis=1)
         if field == 'last_traded':
             return pd.Timestamp(prices[asset.symbol][-1:].index.to_numpy()[0])
         elif field == 'volume':

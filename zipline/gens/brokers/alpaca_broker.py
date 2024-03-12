@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import alpaca_trade_api as tradeapi
+from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 from zipline.gens.brokers.broker import Broker
 import zipline.protocol as zp
 from zipline.finance.order import (Order as ZPOrder,
@@ -212,12 +213,13 @@ class ALPACABroker(Broker):
             symbols = [asset.symbol for asset in assets]
         if field in ('price', 'last_traded'):
             try:
-                last_trade = self._api.get_last_trade(symbols[0])
+                last_trade = self._api.get_latest_trade(symbols[0])
                 return last_trade.price
             except:
                 return np.nan
 
-        bars = self._api.get_barset(symbols, '1Min', limit=1).df
+        # bars = self._api.get_barset(symbols, '1Min', limit=1).df
+        bars = self._api.get_bars(symbols, TimeFrame(1, TimeFrameUnit.Minute), limit=1).df
         if bars.empty:
             return np.nan
         if not np.isnan(bars[assets.symbol][field]).all():
@@ -254,7 +256,7 @@ class ALPACABroker(Broker):
             editable_position._underlying_position.amount = int(ap_position.qty)
             editable_position._underlying_position.cost_basis = float(ap_position.avg_entry_price)
             editable_position._underlying_position.last_sale_price = float(ap_position.current_price)
-            editable_position._underlying_position.last_sale_date = self._api.get_last_trade(ap_position.symbol).timestamp
+            editable_position._underlying_position.last_sale_date = self._api.get_latest_trade(ap_position.symbol).timestamp
             
             self.metrics_tracker.update_position(z_position.asset,
                                                  amount=z_position.amount,
@@ -286,8 +288,9 @@ class ALPACABroker(Broker):
             symbols = [assets.symbol]
         else:
             symbols = [asset.symbol for asset in assets]
-        timeframe = '1D' if is_daily else '1Min'
-        df = self._api.get_barset(symbols, timeframe, limit=500).df
+        timeframe = TimeFrame(1, TimeFrameUnit.Day) if is_daily else TimeFrame(1, TimeFrameUnit.Minute)
+        # df = self._api.get_barset(symbols, timeframe, limit=500).df
+        df = self._api.get_bars(symbols, timeframe, limit=500).df
         if not is_daily:
             df = df.between_time("09:30", "16:00")
         return df

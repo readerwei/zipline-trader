@@ -19,9 +19,16 @@ from zipline.finance.execution import (StopLimitOrder,
 from zipline.finance.order import ORDER_STATUS
 from zipline.testing.fixtures import (ZiplineTestCase,
                                       WithDataPortal)
+import os
+import yaml
 
+with open("D:\\zipline_trader\\zipline-trader.yaml", mode='r') as f:
+    o = yaml.safe_load(f)
+    os.environ["APCA_API_KEY_ID"] = o["alpaca"]["key_id"]
+    os.environ["APCA_API_SECRET_KEY"] = o["alpaca"]["secret"]
+    os.environ["APCA_API_BASE_URL"] = o["alpaca"]["base_url"]
 
-@unittest.skip("Failing on CI - fix later")
+# @unittest.skip("Failing on CI - fix later")
 class TestALPACABroker(WithSimParams,
                        WithDataPortal,
                        ZiplineTestCase):
@@ -139,8 +146,10 @@ class TestALPACABroker(WithSimParams,
     def test_order(self, tradeapi, symbol_lookup):
         api = tradeapi.REST()
         asset = self.asset_finder.retrieve_asset(1)
-        symbol_lookup.return_value = asset
-        broker = ALPACABroker('')
+        symbol_lookup.return_value = asset        
+        
+        broker = ALPACABroker()
+        # broker = ALPACABroker('')
         amount = 10
 
         submitted_orders = []
@@ -277,7 +286,7 @@ class TestALPACABroker(WithSimParams,
             order3,
             order4,
         ]
-        broker = ALPACABroker('')
+        broker = ALPACABroker()
         orders = broker.orders
         assert orders[id1].status == ORDER_STATUS.FILLED
         assert orders[id1].filled == int(order1.filled_qty)
