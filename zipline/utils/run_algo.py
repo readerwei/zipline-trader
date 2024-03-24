@@ -85,6 +85,7 @@ def _run(handle_data,
          local_namespace,
          environ,
          blotter,
+         custom_loader,
          benchmark_spec,
          broker,
          state_filename,
@@ -214,12 +215,15 @@ def _run(handle_data,
 
     def choose_loader(column):
         # TODO Domain bypass
-        return pipeline_loader
+        # return pipeline_loader
         if column in USEquityPricing.columns:
             return pipeline_loader
-        raise ValueError(
-            "No PipelineLoader registered for column %s." % column
-        )
+        try:
+            return custom_loader.get(column)
+        except KeyError:
+            raise ValueError(
+                "No PipelineLoader registered for column %s." % column
+            )
 
     if isinstance(metrics_set, six.string_types):
         try:
@@ -366,6 +370,7 @@ def run_algorithm(start,
                   strict_extensions=True,
                   environ=os.environ,
                   blotter='default',
+                  custom_loader=None,
                   broker=None,
                   performance_callback=None,
                   stop_execution_callback=None,
@@ -480,6 +485,7 @@ def run_algorithm(start,
         local_namespace=False,
         environ=environ,
         blotter=blotter,
+        custom_loader=custom_loader,
         benchmark_spec=benchmark_spec,
         broker=broker,
         state_filename=state_filename,
