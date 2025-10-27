@@ -164,7 +164,7 @@ def get_aggs_from_alpaca(symbols,
         """
         only interested in samples between 9:30, 16:00 NY time
         """
-        return df.between_time("09:30", "16:00")
+        return df.between_time("09:30", "20:00")
 
     def _drop_early_samples(df):
         """
@@ -195,7 +195,7 @@ def get_aggs_from_alpaca(symbols,
             ])
         )
         if granularity == 'minute':
-            return df.between_time("09:30", "16:00")
+            return df.between_time("09:30", "21:00")
         else:
             return df
 
@@ -342,7 +342,7 @@ if __name__ == '__main__':
     # while not cal.is_session(start_date):
     #     start_date += timedelta(days=1)
 
-    start_date = end_date - timedelta(days=1500)
+    start_date = end_date - timedelta(days=10)
     while not cal.is_session(start_date):
         start_date -= timedelta(days=1)
 
@@ -355,8 +355,8 @@ if __name__ == '__main__':
     register(
         'alpaca_api',
         # api_to_bundle(interval=['1d', '1m']),
-        # api_to_bundle(interval=['1m']),
-        api_to_bundle(interval=['1d']),
+        api_to_bundle(interval=['1m']),
+        # api_to_bundle(interval=['1d']),
         calendar_name='NYSE',
         start_session=start_date,
         end_session=end_date

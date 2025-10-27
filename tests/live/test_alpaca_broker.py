@@ -22,7 +22,7 @@ from zipline.testing.fixtures import (ZiplineTestCase,
 import os
 import yaml
 
-with open("D:\\zipline_trader\\zipline-trader.yaml", mode='r') as f:
+with open("/home/wei/Documents/zipline-yaml/zipline-trader.yaml", mode='r') as f:
     o = yaml.safe_load(f)
     os.environ["APCA_API_KEY_ID"] = o["alpaca"]["key_id"]
     os.environ["APCA_API_SECRET_KEY"] = o["alpaca"]["secret"]
