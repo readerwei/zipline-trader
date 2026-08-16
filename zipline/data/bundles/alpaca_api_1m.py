@@ -7,6 +7,7 @@ import pandas as pd
 import pytz
 from alpaca_trade_api.common import URL
 from dateutil import tz
+import trading_calendars
 from trading_calendars import TradingCalendar
 
 import zipline.config
@@ -124,7 +125,9 @@ def get_aggs_from_alpaca(symbols,
             #                       )
             delta = timedelta(days=1) if granularity == "day" else timedelta(minutes=1)
             # r = CLIENT.get_bars(symbols, timeframe, limit=1000, start=curr.isoformat(), end=end.isoformat())
-            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(), end=end.isoformat())
+            # adjustment='all' -> split AND dividend adjusted bars (API default is 'raw').
+            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(), end=end.isoformat(),
+                                adjustment='all')
             
             # response = r.df
             # response.sort_index(inplace=True)
@@ -279,7 +282,7 @@ def metadata_df():
     return metadata_df
 
 
-@bundles.register('alpaca_api', calendar_name="NYSE", minutes_per_day=390)
+@bundles.register('alpaca_api_1m', calendar_name="NYSE", minutes_per_day=390)
 def api_to_bundle(interval=['1m']):
     def ingest(environ,
                asset_db_writer,
@@ -318,7 +321,12 @@ def api_to_bundle(interval=['1m']):
             # Drop the ticker rows which have missing sessions in their data sets
             metadata.dropna(inplace=True)
 
-            asset_db_writer.write(equities=metadata)
+            # explicit exchanges frame -> country_code 'US' instead of the '??' default
+            exchanges = pd.DataFrame(
+                data=[['NYSE', 'NYSE', 'US']],
+                columns=['exchange', 'canonical_name', 'country_code'])
+
+            asset_db_writer.write(equities=metadata, exchanges=exchanges)
             print(metadata)
             adjustment_writer.write()
 
@@ -332,10 +340,17 @@ if __name__ == '__main__':
     import os
 
     cal: TradingCalendar = trading_calendars.get_calendar('NYSE')
-    # end_date = pd.Timestamp('now', tz='utc').date() - timedelta(days=1)
-    end_date = pd.Timestamp('now', tz='utc').date()
+    # "Today" must be evaluated in exchange-local time AND the session must be
+    # closed, else _fillna() forward-fills the previous close into an empty
+    # session. See the same fix in alpaca_api.py.
+    now_ny = pd.Timestamp('now', tz=NY)
+    end_date = now_ny.date()
     while not cal.is_session(str(end_date)):
         end_date -= timedelta(days=1)
+    if now_ny < cal.session_close(pd.Timestamp(end_date, tz='utc')):
+        end_date -= timedelta(days=1)
+        while not cal.is_session(str(end_date)):
+            end_date -= timedelta(days=1)
     end_date = pd.Timestamp(end_date, tz='utc')
 
     # start_date = pd.Timestamp('2020-10-03 0:00', tz='utc')
@@ -353,7 +368,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     register(
-        'alpaca_api',
+        'alpaca_api_1m',
         # api_to_bundle(interval=['1d', '1m']),
         api_to_bundle(interval=['1m']),
         # api_to_bundle(interval=['1d']),
@@ -364,7 +379,7 @@ if __name__ == '__main__':
 
     assets_version = ((),)[0]  # just a weird way to create an empty tuple
     bundles_module.ingest(
-        "alpaca_api",
+        "alpaca_api_1m",
         os.environ,
         assets_versions=assets_version,
         show_progress=True,

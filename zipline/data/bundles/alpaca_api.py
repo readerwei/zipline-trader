@@ -7,6 +7,7 @@ import pandas as pd
 import pytz
 from alpaca_trade_api.common import URL
 from dateutil import tz
+import trading_calendars
 from trading_calendars import TradingCalendar
 
 import zipline.config
@@ -124,7 +125,12 @@ def get_aggs_from_alpaca(symbols,
             #                       )
             delta = timedelta(days=1) if granularity == "day" else timedelta(minutes=1)
             # r = CLIENT.get_bars(symbols, timeframe, limit=1000, start=curr.isoformat(), end=end.isoformat())
-            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(), end=end.isoformat())
+            # adjustment='all' -> split AND dividend adjusted bars. The API default
+            # is 'raw', which left splits (GOOG 20:1, TSLA 3:1, NVDA 10:1) in the
+            # data as ~-90% one-day returns and silently poisoned every lookback
+            # factor spanning them.
+            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(), end=end.isoformat(),
+                                adjustment='all')
             
             # response = r.df
             # response.sort_index(inplace=True)
@@ -318,7 +324,16 @@ def api_to_bundle(interval=['1m']):
             # Drop the ticker rows which have missing sessions in their data sets
             metadata.dropna(inplace=True)
 
-            asset_db_writer.write(equities=metadata)
+            # Without an explicit exchanges frame the asset writer defaults
+            # country_code to '??' (asset_writer.py:144), which makes the bundle
+            # unusable by any US_EQUITIES pipeline domain -- notably
+            # zipline-reloaded, which errors with "Failed to find any assets with
+            # country_code 'US'".
+            exchanges = pd.DataFrame(
+                data=[['NYSE', 'NYSE', 'US']],
+                columns=['exchange', 'canonical_name', 'country_code'])
+
+            asset_db_writer.write(equities=metadata, exchanges=exchanges)
             print(metadata)
             adjustment_writer.write()
 
@@ -333,9 +348,22 @@ if __name__ == '__main__':
 
     cal: TradingCalendar = trading_calendars.get_calendar('NYSE')
     # end_date = pd.Timestamp('now', tz='utc').date() - timedelta(days=1)
-    end_date = pd.Timestamp('now', tz='utc').date()
+    #
+    # "Today" has to be evaluated in exchange-local time and the session has to
+    # be CLOSED, otherwise we ask the API for a session that has no data yet and
+    # _fillna() silently forward-fills the previous close into it -- every ingest
+    # then ends with a fabricated duplicate bar that the daily report reads.
+    # The cron fires 21:34 CDT = 02:34 UTC, i.e. already the next calendar day in
+    # UTC while New York is still on the previous, completed session.
+    now_ny = pd.Timestamp('now', tz=NY)
+    end_date = now_ny.date()
     while not cal.is_session(str(end_date)):
         end_date -= timedelta(days=1)
+    if now_ny < cal.session_close(pd.Timestamp(end_date, tz='utc')):
+        # that session is still in progress; back up to the last completed one
+        end_date -= timedelta(days=1)
+        while not cal.is_session(str(end_date)):
+            end_date -= timedelta(days=1)
     end_date = pd.Timestamp(end_date, tz='utc')
 
     # start_date = pd.Timestamp('2020-10-03 0:00', tz='utc')

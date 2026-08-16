@@ -73,21 +73,27 @@ class ALPACABroker(Broker):
     def portfolio(self):
         account = self._api.get_account()
         z_portfolio = zp.Portfolio()
-        z_portfolio.cash = float(account.cash)
-        z_portfolio.positions = self.positions
-        z_portfolio.positions_value = float(
+        # Portfolio.__setattr__ raises; mutate through MutableView, the same way
+        # ib_broker.py does. Direct assignment here has never worked -- the guard
+        # in protocol.py predates this file.
+        editable_portfolio = zp.MutableView(z_portfolio)
+        editable_portfolio.cash = float(account.cash)
+        editable_portfolio.positions = self.positions
+        editable_portfolio.positions_value = float(
             account.portfolio_value) - float(account.cash)
-        z_portfolio.portfolio_value = float(account.portfolio_value)
+        editable_portfolio.portfolio_value = float(account.portfolio_value)
         return z_portfolio
 
     @property
     def account(self):
         account = self._api.get_account()
         z_account = zp.Account()
-        z_account.buying_power = float(account.cash)
-        z_account.total_position_value = float(
+        # Account is immutable for the same reason as Portfolio, see above.
+        editable_account = zp.MutableView(z_account)
+        editable_account.buying_power = float(account.cash)
+        editable_account.total_position_value = float(
             account.portfolio_value) - float(account.cash)
-        z_account.net_liquidation = account.portfolio_value
+        editable_account.net_liquidation = float(account.portfolio_value)
         return z_account
 
     @property
@@ -182,8 +188,19 @@ class ALPACABroker(Broker):
         for order in orders:
             if order.filled_at is None:
                 continue
+            try:
+                asset = symbol_lookup(order.symbol)
+            except SymbolNotFound:
+                # Non-equity history (crypto pairs like 'BTC/USD') or symbols
+                # that were never ingested. The `orders` property already skips
+                # these; without the same guard here a single such fill in the
+                # account's history breaks every fill-processing pass in
+                # blotter_live.
+                log.warning('Skipping transaction for unknown symbol %s'
+                            % order.symbol)
+                continue
             tx = Transaction(
-                asset=symbol_lookup(order.symbol),
+                asset=asset,
                 amount=int(order.filled_qty),
                 dt=order.filled_at,
                 price=float(order.filled_avg_price),
@@ -276,7 +293,10 @@ class ALPACABroker(Broker):
                                                  amount=0)
         # for some reason, the metrics tracker has self.positions AND self.portfolio.positions. let's make sure
         # these objects are consistent
-        self.metrics_tracker._ledger._portfolio.positions = self.metrics_tracker.positions                                                 
+        # _ledger._portfolio is a protocol.Portfolio, so it has to be mutated
+        # through MutableView like everything else in this file.
+        zp.MutableView(self.metrics_tracker._ledger._portfolio).positions = \
+            self.metrics_tracker.positions
 
     def get_realtime_bars(self, assets, data_frequency):
         # TODO: cache the result. The caller
