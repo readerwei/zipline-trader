@@ -118,12 +118,17 @@ class DataPortalLive(DataPortal):
         elif data_frequency == 'daily':
             data_frequency = '1d'
         prices = self.broker.get_realtime_bars([asset], data_frequency)
-        prices = prices.pivot(columns='symbol').swaplevel(axis=1)
+        # Broker.get_realtime_bars returns the asset on column level 0 and
+        # OHLCV on level 1 -- the shape get_history_window above documents and
+        # relies on. This method used to pivot the raw long-form frame itself
+        # and index by the symbol string, which is why the two disagreed: only
+        # one of them could be right about what the broker returns.
+        bars = prices[asset]
         if field == 'last_traded':
-            return pd.Timestamp(prices[asset.symbol][-1:].index.to_numpy()[0])
+            return pd.Timestamp(bars[-1:].index.to_numpy()[0])
         elif field == 'volume':
-            return prices[asset.symbol][field][-1] * 100
+            return bars[field][-1] * 100
         elif field == 'price':
-            return prices[asset.symbol]['close'][-1]
+            return bars['close'][-1]
         else:
-            return prices[asset.symbol][field][-1]
+            return bars[field][-1]
