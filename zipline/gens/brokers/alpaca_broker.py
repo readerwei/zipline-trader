@@ -25,6 +25,8 @@ from zipline.finance.transaction import Transaction
 from zipline.api import symbol as symbol_lookup
 from zipline.errors import SymbolNotFound
 import pandas as pd
+from collections import OrderedDict
+
 import numpy as np
 import uuid
 
@@ -51,15 +53,27 @@ class ALPACABroker(Broker):
 
     def __init__(self):
         self._api = tradeapi.REST()
+        self._subscribed = OrderedDict()
 
     def subscribe_to_market_data(self, asset):
-        '''Do nothing to comply the interface'''
-        pass
+        self._subscribed[asset.symbol] = asset
 
+    @property
     def subscribed_assets(self):
-        '''Do nothing to comply the interface'''
-        return []
-      
+        # Must be a property: Broker declares it as one and ib_broker
+        # implements it as one. Without the decorator this returns the bound
+        # method itself, and LiveTradingAlgorithm.on_exit() -- which runs
+        # whenever --realtime-bar-target is set -- hands that function to
+        # get_realtime_bars and dies with
+        # "AttributeError: 'function' object has no attribute 'symbol'".
+        #
+        # Nothing in zipline calls subscribe_to_market_data, so the set is
+        # populated from the assets the algorithm actually asks about instead
+        # (see get_spot_value). Returning a bare [] met the interface and made
+        # the realtime bar dump silently write nothing.
+        return list(self._subscribed.values())
+
+
     def set_metrics_tracker(self, metrics_tracker):
         self.metrics_tracker = metrics_tracker
 
@@ -226,8 +240,11 @@ class ALPACABroker(Broker):
         assets_is_scalar = not isinstance(assets, (list, set, tuple))
         if assets_is_scalar:
             symbols = [assets.symbol]
+            self.subscribe_to_market_data(assets)
         else:
             symbols = [asset.symbol for asset in assets]
+            for asset in assets:
+                self.subscribe_to_market_data(asset)
         if field in ('price', 'last_traded'):
             try:
                 last_trade = self._api.get_latest_trade(symbols[0])
@@ -306,11 +323,48 @@ class ALPACABroker(Broker):
         is_daily = 'd' in data_frequency  # 'daily' or '1d'
         if assets_is_scalar:
             symbols = [assets.symbol]
+            self.subscribe_to_market_data(assets)
         else:
             symbols = [asset.symbol for asset in assets]
+            for asset in assets:
+                self.subscribe_to_market_data(asset)
         timeframe = TimeFrame(1, TimeFrameUnit.Day) if is_daily else TimeFrame(1, TimeFrameUnit.Minute)
         # df = self._api.get_barset(symbols, timeframe, limit=500).df
-        df = self._api.get_bars(symbols, timeframe, limit=500).df
+        # Alpaca's limit counts rows across ALL requested symbols, not per
+        # symbol. A flat limit=500 for a 3-name request came back with 500 bars
+        # of the first symbol and nothing for the others, so a multi-asset
+        # history window silently lost every asset but one.
+        df = self._api.get_bars(symbols, timeframe,
+                                limit=500 * len(symbols)).df
+        if df.empty:
+            return df
+
         if not is_daily:
-            df = df.between_time("09:30", "16:00")
+            # between_time() reads the index's own clock. Alpaca returns UTC, so
+            # filtering on "09:30"-"16:00" directly selected 05:30-12:00 New
+            # York -- keeping pre-market and throwing away the afternoon. Convert
+            # first, then filter, then convert back so callers still see UTC.
+            tz = df.index.tz
+            df = df.tz_convert(NY).between_time("09:30", "16:00").tz_convert(tz)
+
+        # Both consumers want asset on column level 0 and OHLCV on level 1:
+        # DataPortalLive.get_history_window swaplevel()s to pick a field, and
+        # LiveTradingAlgorithm.on_exit indexes with the Equity itself. The raw
+        # frame is long-form with a 'symbol' column, so neither worked -- history
+        # raised on swaplevel and the realtime-bar dump raised KeyError(Equity).
+        if 'symbol' in df.columns:
+            df = df.pivot(columns='symbol').swaplevel(axis=1)
+
+        by_symbol = {a.symbol: a for a in ([assets] if assets_is_scalar
+                                           else assets)}
+        if isinstance(df.columns, pd.MultiIndex):
+            # key level 0 by the Asset, and keep the caller's ordering
+            df.columns = df.columns.set_levels(
+                [by_symbol.get(s, s) for s in df.columns.levels[0]], level=0)
+            present = [a for a in by_symbol.values() if a in df.columns.levels[0]]
+            df = df.reindex(columns=present, level=0)
+        else:
+            # single symbol comes back flat; give it the same two-level shape
+            asset = list(by_symbol.values())[0]
+            df.columns = pd.MultiIndex.from_product([[asset], df.columns])
         return df

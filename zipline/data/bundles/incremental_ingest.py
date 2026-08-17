@@ -507,7 +507,17 @@ def main():
     cal = trading_calendars.get_calendar("NYSE")  # type: TradingCalendar
 
     end_session = last_completed_session(cal)
-    start_session = daily_start_session(cal, end_session)
+
+    # The daily store has to extend one session PAST the last completed one.
+    # SimplePipelineEngine computes the row for session T out of data through
+    # T-1, so dailyReport.py's row for the next session -- the one carrying
+    # tomorrow's factors, built from today's close -- only exists if that
+    # session has a slot in the bcolz index.  The bar written into that slot is
+    # a forward-filled placeholder (the API has no data for a session that has
+    # not happened yet); the pipeline never reads it as data, only as an index
+    # entry.  Minute bars stop at the last completed session as before.
+    daily_end_session = cal.next_session_label(end_session)
+    start_session = daily_start_session(cal, daily_end_session)
 
     initialize_client()
     symbols = list_assets()
@@ -541,7 +551,8 @@ def main():
     sid_map = load_sid_map(sid_map_path, symbols)
     save_sid_map(sid_map_path, sid_map)
 
-    metadata = write_daily(bundle_dir, cal, start_session, end_session, sid_map)
+    metadata = write_daily(bundle_dir, cal, start_session, daily_end_session,
+                           sid_map)
 
     if args.no_minute:
         ensure_minute_metadata(bundle_dir, cal, end_session, args.minute_sessions)

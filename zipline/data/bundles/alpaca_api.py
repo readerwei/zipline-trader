@@ -129,7 +129,23 @@ def get_aggs_from_alpaca(symbols,
             # is 'raw', which left splits (GOOG 20:1, TSLA 3:1, NVDA 10:1) in the
             # data as ~-90% one-day returns and silently poisoned every lookback
             # factor spanning them.
-            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(), end=end.isoformat(),
+            # Daily bars are stamped 00:00 NY (04:00 UTC) and `end` is exclusive,
+            # so asking for end=<session at 00:00 UTC> drops that session's own
+            # bar -- _fillna() below then forward-fills the previous close into
+            # it and the store ends on a fabricated duplicate.  Ask for one day
+            # past the requested session so `end` means "through end, inclusive".
+            api_end = end + timedelta(days=1) if granularity == 'day' else end
+            # ...but the data API 403s on an `end` that reaches into the last
+            # ~15 minutes of SIP data, and when the caller asks for a session
+            # that has not happened yet (the placeholder slot the daily store
+            # needs) the line above lands in the future.  Clamp it back.
+            cutoff = pd.Timestamp.utcnow() - timedelta(minutes=20)
+            if not api_end.tzname():
+                cutoff = cutoff.tz_localize(None)
+            if api_end > cutoff:
+                api_end = cutoff
+            r = CLIENT.get_bars(symbols, timeframe, start=curr.isoformat(),
+                                end=api_end.isoformat(),
                                 adjustment='all')
             
             # response = r.df
