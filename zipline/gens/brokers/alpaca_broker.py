@@ -328,6 +328,14 @@ class ALPACABroker(Broker):
             symbols = [asset.symbol for asset in assets]
             for asset in assets:
                 self.subscribe_to_market_data(asset)
+        if not symbols:
+            # on_exit() asks for bars for `subscribed_assets`, which is empty
+            # when the algorithm never requested a price -- a session that
+            # started after the close, say. Alpaca answers an empty symbol list
+            # with "400 Bad Request ... symbols=", turning a clean shutdown into
+            # a traceback and a non-zero exit code that a supervising script
+            # then treats as a crash worth restarting.
+            return pd.DataFrame()
         timeframe = TimeFrame(1, TimeFrameUnit.Day) if is_daily else TimeFrame(1, TimeFrameUnit.Minute)
         # df = self._api.get_barset(symbols, timeframe, limit=500).df
         # Alpaca's limit counts rows across ALL requested symbols, not per
