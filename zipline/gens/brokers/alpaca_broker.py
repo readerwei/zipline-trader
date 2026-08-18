@@ -338,12 +338,29 @@ class ALPACABroker(Broker):
             return pd.DataFrame()
         timeframe = TimeFrame(1, TimeFrameUnit.Day) if is_daily else TimeFrame(1, TimeFrameUnit.Minute)
         # df = self._api.get_barset(symbols, timeframe, limit=500).df
-        # Alpaca's limit counts rows across ALL requested symbols, not per
-        # symbol. A flat limit=500 for a 3-name request came back with 500 bars
-        # of the first symbol and nothing for the others, so a multi-asset
-        # history window silently lost every asset but one.
+        # `limit` without `start` returns the EARLIEST bars Alpaca has for the
+        # window, not the latest -- at 09:40 New York that is pre-market only,
+        # 04:00-09:25, and the regular-hours filter then correctly discards all
+        # of it and returns nothing. (This is why the old UTC-clock filter
+        # appeared to work: it kept 05:30-12:00 New York, i.e. pre-market, and
+        # passed it off as the session.) Ask for a window ending now instead,
+        # and take the tail.
+        #
+        # Alpaca's limit also counts rows across ALL requested symbols rather
+        # than per symbol, so it has to scale with the request.
+        end_dt = pd.Timestamp.utcnow()
+        start_dt = end_dt - (pd.Timedelta(days=10) if is_daily
+                             else pd.Timedelta(days=4))
+        # feed='iex' explicitly. The bars endpoint defaults to SIP, and this
+        # account's SIP entitlement is delayed 15 minutes, so asking for a
+        # window ending now returns 403 Forbidden. IEX is what is actually
+        # available in real time here -- roughly 2-3% of consolidated volume,
+        # so treat these bars as indicative rather than as the tape.
         df = self._api.get_bars(symbols, timeframe,
-                                limit=500 * len(symbols)).df
+                                start=start_dt.isoformat(),
+                                end=end_dt.isoformat(),
+                                limit=2000 * len(symbols),
+                                feed='iex').df
         if df.empty:
             return df
 
@@ -362,14 +379,24 @@ class ALPACABroker(Broker):
         # raised on swaplevel and the realtime-bar dump raised KeyError(Equity).
         if 'symbol' in df.columns:
             df = df.pivot(columns='symbol').swaplevel(axis=1)
+        df = df.tail(500)
 
         by_symbol = {a.symbol: a for a in ([assets] if assets_is_scalar
                                            else assets)}
         if isinstance(df.columns, pd.MultiIndex):
+            # An empty level 0 means the pivot produced no symbol columns at
+            # all -- which happens for a symbol with no prints in the window,
+            # e.g. the first minutes after the open. set_levels([]) then raises
+            # IndexError from inside pandas and takes the whole live session
+            # down, so bail out with an empty frame instead.
+            if not len(df.columns.levels) or not len(df.columns.levels[0]):
+                return pd.DataFrame()
             # key level 0 by the Asset, and keep the caller's ordering
             df.columns = df.columns.set_levels(
                 [by_symbol.get(s, s) for s in df.columns.levels[0]], level=0)
             present = [a for a in by_symbol.values() if a in df.columns.levels[0]]
+            if not present:
+                return pd.DataFrame()
             df = df.reindex(columns=present, level=0)
         else:
             # single symbol comes back flat; give it the same two-level shape

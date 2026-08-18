@@ -186,7 +186,20 @@ def get_aggs_from_alpaca(symbols,
         """
         only interested in samples between 9:30, 16:00 NY time
         """
-        return df.between_time("09:30", "16:00")
+        # between_time reads the index's own clock, and Alpaca returns UTC, so
+        # filtering "09:30"-"16:00" directly kept 05:31-12:00 New York: the
+        # entire afternoon was discarded and pre-market was kept in its place.
+        # The bcolz writer then filled 12:00-16:00 with zero-volume bars, which
+        # VolumeShareSlippage refuses to fill against -- an order placed after
+        # noon simply never executed until the next session's open. Convert,
+        # filter, convert back so callers still get UTC.
+        if df.empty:
+            return df
+        tz = df.index.tz
+        if tz is None:
+            return df.between_time("09:30", "16:00")
+        return (df.tz_convert(NY).between_time("09:30", "16:00")
+                .tz_convert(tz))
 
     def _drop_early_samples(df):
         """

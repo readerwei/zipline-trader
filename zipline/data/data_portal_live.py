@@ -123,6 +123,12 @@ class DataPortalLive(DataPortal):
         # relies on. This method used to pivot the raw long-form frame itself
         # and index by the symbol string, which is why the two disagreed: only
         # one of them could be right about what the broker returns.
+        if prices is None or prices.empty or asset not in prices:
+            # The broker can legitimately have nothing -- a halted symbol, or a
+            # window with no prints. Returning NaN lets the ledger carry the
+            # last known price forward; raising KeyError from here kills the
+            # whole live session at the next minute close.
+            return float('nan')
         bars = prices[asset]
         if field == 'last_traded':
             return pd.Timestamp(bars[-1:].index.to_numpy()[0])
